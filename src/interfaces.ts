@@ -218,6 +218,11 @@ export interface IMemoryType extends ISbResult {
   [key: string]: any;
 }
 
+export interface ICacheVersionProvider {
+  get: (token: string) => Promise<number | undefined>;
+  set: (token: string, version: number) => Promise<void>;
+}
+
 export interface ICacheProvider {
   get: (key: string) => Promise<IMemoryType | void>;
   set: (key: string, content: ISbResult) => Promise<void>;
@@ -236,6 +241,7 @@ export interface ISbConfig {
   oauthToken?: string;
   resolveNestedRelations?: boolean;
   cache?: ISbCache;
+  cacheVersionProvider?: ICacheVersionProvider;
   responseInterceptor?: ResponseFn;
   fetch?: typeof fetch;
   timeout?: number;

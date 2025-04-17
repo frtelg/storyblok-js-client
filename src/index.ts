@@ -7,6 +7,7 @@ import { STORYBLOK_AGENT, STORYBLOK_JS_CLIENT_AGENT } from './constants';
 
 import type {
   ICacheProvider,
+  ICacheVersionProvider,
   IMemoryType,
   ISbCache,
   ISbConfig,
@@ -29,6 +30,16 @@ import type {
 let memory: Partial<IMemoryType> = {};
 
 const cacheVersions = {} as CachedVersions;
+
+function localCachedVersionProvider(): ICacheVersionProvider {
+  return {
+    get: token => Promise.resolve(cacheVersions[token]),
+    set: (token, version) => {
+      cacheVersions[token] = version;
+      return Promise.resolve();
+    },
+  };
+}
 
 interface ComponentResolverFn {
   (...args: any): any;
@@ -65,6 +76,7 @@ class Storyblok {
   private throttle: ReturnType<typeof throttledQueue>;
   private accessToken: string;
   private cache: ISbCache;
+  private cacheVersionProvider: ICacheVersionProvider;
   private helpers: SbHelpers;
   private resolveCounter: number;
   public relations: RelationsType;
@@ -152,6 +164,7 @@ class Storyblok {
     this.relations = {} as RelationsType;
     this.links = {} as LinksType;
     this.cache = config.cache || { clear: 'manual' };
+    this.cacheVersionProvider = config.cacheVersionProvider || localCachedVersionProvider();
     this.helpers = new SbHelpers();
     this.resolveCounter = 0;
     this.resolveNestedRelations = config.resolveNestedRelations || true;
@@ -182,13 +195,13 @@ class Storyblok {
     });
   }
 
-  private parseParams(params: ISbStoriesParams): ISbStoriesParams {
+  private async parseParams(params: ISbStoriesParams): Promise<ISbStoriesParams> {
     if (!params.token) {
       params.token = this.getToken();
     }
 
     if (!params.cv) {
-      params.cv = cacheVersions[params.token];
+      params.cv = await this.cacheVersionProvider.get(params.token);
     }
 
     if (Array.isArray(params.resolve_relations)) {
@@ -202,10 +215,10 @@ class Storyblok {
     return params;
   }
 
-  private factoryParamOptions(
+  private async factoryParamOptions(
     url: string,
     params: ISbStoriesParams,
-  ): ISbStoriesParams {
+  ): Promise<ISbStoriesParams> {
     if (this.helpers.isCDNUrl(url)) {
       return this.parseParams(params);
     }
@@ -213,14 +226,14 @@ class Storyblok {
     return params;
   }
 
-  private makeRequest(
+  private async makeRequest(
     url: string,
     params: ISbStoriesParams,
     per_page: number,
     page: number,
     fetchOptions?: ISbCustomFetch,
   ): Promise<ISbResult> {
-    const query = this.factoryParamOptions(
+    const query = await this.factoryParamOptions(
       url,
       this.helpers.getOptionsPage(params, per_page, page),
     );
@@ -240,7 +253,7 @@ class Storyblok {
     fetchOptions?: ISbCustomFetch
   ): Promise<ISbResult>;
 
-  public get(
+  public async get(
     slug: string,
     params?: ISbStoriesParams | ISbLinksParams,
     fetchOptions?: ISbCustomFetch,
@@ -249,7 +262,7 @@ class Storyblok {
       params = {} as ISbStoriesParams;
     }
     const url = `/${slug}`;
-    const query = this.factoryParamOptions(url, params);
+    const query = await this.factoryParamOptions(url, params);
 
     return this.cacheResponse(url, query, undefined, fetchOptions);
   }
@@ -725,13 +738,15 @@ class Storyblok {
           || this.cache.clear === 'auto';
 
         if (params.token && response.data.cv) {
+          const cacheVersion = await this.cacheVersionProvider.get(params.token);
+
           if (isCacheClearable
-            && cacheVersions[params.token] // there is a cache
-            && cacheVersions[params.token] !== response.data.cv // a new cv is incoming
+            && cacheVersion // there is a cache
+            && cacheVersion !== response.data.cv // a new cv is incoming
           ) {
             await this.flushCache();
           }
-          cacheVersions[params.token] = response.data.cv;
+          this.cacheVersionProvider.set(params.token, response.data.cv);
         }
 
         return resolve(response);
